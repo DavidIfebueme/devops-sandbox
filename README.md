@@ -1,173 +1,172 @@
-# DevOps Sandbox Platform
+# devops sandbox platform
 
-A self-service platform for spinning up isolated temporary environments, deploying apps, simulating outages, monitoring health, and tearing everything down — automatically or on demand.
+a self-service platform where you spin up isolated temporary environments, deploy apps into them, simulate outages, monitor health, and destroy everything — automatically or on demand. think of it as a mini internal heroku with a chaos engineering toggle. every environment is short-lived by design.
 
-## Architecture
+## architecture
 
 ```mermaid
-flowchart TB
-    subgraph HOST["Host VM"]
-        direction TB
+graph TD
+    CLIENT[client] -->|:80| NGINX
+    CLIENT -->|:8080| API
 
-        NGINX["Nginx (Docker)"]
-        FASTAPI["FastAPI API"]
-        DAEMON["Daemon (nohup)"]
-        POLLER["Poller (py)"]
-        PROM["Prometheus (opt)"]
-        GRAF["Grafana (opt)"]
+    subgraph vm [host vm]
+        NGINX[nginx - docker container] -->|/env-abc123/| APP1[env-abc123-app]
+        NGINX -->|/env-xyz789/| APP2[env-xyz789-app]
+        NGINX -->|sandbox-net| NET1[env-abc123-net]
+        NGINX -->|sandbox-net| NET2[env-xyz789-net]
 
-        APP1["env-abc123-app:8080"]
-        APP2["env-xyz789-app:8080"]
+        API[fastapi control api] -->|subprocess| SCRIPTS[bash scripts]
+        API -->|reads| STATE[envs/*.json + logs/*]
 
-        NGINX -- "/env-abc123/" --> APP1
-        NGINX -- "/env-xyz789/" --> APP2
+        DAEMON[cleanup daemon - nohup] -->|every 60s| STATE
+        POLLER[health poller - python] -->|every 30s| NGINX
+        POLLER -->|writes| HLOG[health.log]
 
-        FASTAPI -- "subprocess" --> BASH["bash scripts"]
-        FASTAPI -- "reads" --> FILES["envs/*.json\nlogs/*"]
-
-        FASTAPI --> DAEMON
-        FASTAPI --> POLLER
-
-        NET["sandbox-net\n(Docker bridge)"]
-        NGINX --- NET
-        FASTAPI --- NET
+        APP1 -->|logs| SHIP1[docker logs -f]
+        APP2 -->|logs| SHIP2[docker logs -f]
     end
 
-    PORT80[":80"] --> NGINX
-    PORT8080[":8080"] --> FASTAPI
-    PORT9090[":9090"] --> PROM
-    PORT3000[":3000"] --> GRAF
+    style NGINX fill:#f9a825,stroke:#333,color:#000
+    style API fill:#4caf50,stroke:#333,color:#fff
+    style DAEMON fill:#ef5350,stroke:#333,color:#fff
+    style POLLER fill:#42a5f5,stroke:#333,color:#fff
 ```
 
-### Network Design
+### network design
 
-- **sandbox-net**: Docker bridge network connecting Nginx to platform services
-- **env-$ID-net**: Per-environment bridge network providing isolation
-- Nginx dynamically connects to each env network on create, disconnects on destroy
-- Docker's embedded DNS (127.0.0.11) resolves container names within networks
+- **sandbox-net**: main docker bridge network that nginx sits on
+- **env-$id-net**: per-environment bridge network for isolation. nginx dynamically connects to each one on create and disconnects on destroy
+- docker's embedded dns at `127.0.0.11` resolves container names within networks, so nginx can proxy to `env-abc123-app:8080` without hardcoded ips
 
-### Log Shipping (Approach A)
+### log shipping (approach a)
 
-Each environment's container logs are tailed via `docker logs -f` and written to `logs/$ENV_ID/app.log`. The background process PID is stored in the state file and killed on destroy to prevent zombies.
+each env's container logs are tailed via `docker logs -f` and written to `logs/$env_id/app.log`. the background process pid is stored in the state file and killed on destroy — no zombie processes. it's the simple approach but it works. `make logs ENV=env-abc123` tails the log for you.
 
-## Prerequisites
+## prerequisites
 
-- Ubuntu 22.04 LTS (or similar Linux)
-- Docker 20.x+ and Docker Compose v2
-- Python 3.10+ with pip
+- ubuntu 22.04 lts (or similar linux)
+- docker 20.x+ and docker compose v2
+- python 3.10+ with pip
 - make, jq, curl
+- rust toolchain (only if you want to build the demo app locally — the docker build handles it for you)
 
-## Quick Start
+## quick start
+
+from zero to first running env in under 5 commands:
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/<YOUR_ORG>/devops-sandbox.git
+# 1. clone the repo
+git clone https://github.com/DavidIfebueme/devops-sandbox.git
 cd devops-sandbox
 
-# 2. Configure environment
+# 2. set your config
 cp .env.example .env
-# Edit .env and set HOST_IP to your server's public IP
+# edit .env — set HOST_IP to your server's public ip
 
-# 3. Build the sandbox app image
+# 3. build the sandbox app image
 make build-app
 
-# 4. Start the platform
+# 4. start the platform
 make up
 
-# 5. Create your first environment
+# 5. create your first environment
 make create
-# Follow the prompts — you'll get a URL back
-
-# That's it! Visit the URL to see your running environment.
+# follow the prompts — you'll get a url back
 ```
 
-## API Endpoints
+that's it. visit the url and you'll see your running environment.
 
-| Method | Endpoint            | Description                     |
-|--------|---------------------|---------------------------------|
-| POST   | `/envs`             | Create a new environment        |
-| GET    | `/envs`             | List all active environments    |
-| DELETE | `/envs/:id`         | Destroy an environment          |
-| GET    | `/envs/:id/logs`    | Last 100 lines of app.log       |
-| GET    | `/envs/:id/health`  | Last 10 health check results    |
-| POST   | `/envs/:id/outage`  | Trigger outage simulation       |
+## api endpoints
 
-API docs available at `http://<HOST>:8080/docs` (Swagger UI)
+the control api wraps all the bash scripts. 6 endpoints, all REST:
 
-## Demo Walkthrough
+| method | endpoint            | what it does                        |
+|--------|---------------------|-------------------------------------|
+| post   | `/envs`             | create a new environment            |
+| get    | `/envs`             | list all active envs + ttl remaining|
+| delete | `/envs/:id`         | destroy an environment              |
+| get    | `/envs/:id/logs`    | last 100 lines of app.log           |
+| get    | `/envs/:id/health`  | last 10 health check results        |
+| post   | `/envs/:id/outage`  | trigger outage simulation           |
+
+full interactive docs at `http://<host>:8080/docs` (swagger ui)
+
+## demo walkthrough
+
+here's the full flow — create → deploy → check health → simulate outage → observe → recover → auto-destroy:
 
 ```bash
-# Start the platform
+# start the platform
 make up
 
-# Create an environment named "demo" with 60-minute TTL
+# create an environment named "demo" with 60-minute ttl
 bash platform/create_env.sh demo 60
-# Note the ENV_ID and URL from the output
+# note the env_id and url from the output
 
-# Check the environment is healthy
+# check the environment is healthy
 make health
 
-# Hit the environment directly
-curl http://<HOST>/env-XXXXXX/
+# hit the environment directly
+curl http://<host>/env-XXXXXX/
 
-# Simulate a crash
+# simulate a crash
 make simulate ENV=env-XXXXXX MODE=crash
 
-# Wait up to 90 seconds — health monitor will detect failure
+# wait up to 90 seconds — health monitor will detect the failure
 make health
-# Status should show "degraded"
+# status should show "degraded"
 
-# Recover the environment
+# recover the environment
 make simulate ENV=env-XXXXXX MODE=recover
 
-# Verify recovery
+# verify recovery
 make health
 
-# Check logs
+# check logs
 make logs ENV=env-XXXXXX
 
-# Destroy the environment
+# destroy the environment
 make destroy ENV=env-XXXXXX
 
-# Or just wait — the cleanup daemon will auto-destroy when TTL expires
+# or just wait — the cleanup daemon will auto-destroy when ttl expires
 ```
 
-## Make Targets
+## make targets
 
-Run `make help` to see all available targets.
+run `make help` to see all available targets.
 
-| Target              | Description                                    |
-|---------------------|------------------------------------------------|
-| `make up`           | Start Nginx + daemon + API + health poller     |
-| `make down`         | Stop everything, destroy all environments      |
-| `make create`       | Create a new environment (interactive)          |
-| `make destroy ENV=` | Destroy specific environment                   |
-| `make logs ENV=`    | Tail environment logs                          |
-| `make health`       | Show health status of all environments         |
-| `make simulate ENV= MODE=` | Run outage simulation                  |
-| `make clean`        | Wipe all state, logs, archives                 |
-| `make build-app`    | Build the sandbox app Docker image             |
-| `make monitoring`   | Start Prometheus + Grafana (optional)          |
+| target                | what it does                                       |
+|-----------------------|----------------------------------------------------|
+| `make up`             | start nginx + daemon + api + health poller         |
+| `make down`           | stop everything, destroy all environments          |
+| `make create`         | create a new environment (prompts for name + ttl)  |
+| `make destroy ENV=`   | destroy a specific environment                     |
+| `make logs ENV=`      | tail environment logs                              |
+| `make health`         | show health status of all environments             |
+| `make simulate ENV= MODE=` | run outage simulation                        |
+| `make clean`          | wipe all state, logs, archives                     |
+| `make build-app`      | build the sandbox app docker image                 |
+| `make monitoring`     | start prometheus + grafana (optional)              |
 
-## Outage Simulation Modes
+## outage simulation modes
 
-| Mode      | Effect                                         |
-|-----------|------------------------------------------------|
-| `crash`   | Kills the container (health monitor catches it) |
-| `pause`   | Pauses the container (recover with unpause)     |
-| `network` | Disconnects container from its network          |
-| `recover` | Restores whatever was broken                    |
-| `stress`  | Spikes CPU with stress-ng (optional)           |
+| mode      | what happens                                             |
+|-----------|----------------------------------------------------------|
+| `crash`   | kills the container — health monitor catches it within 90s|
+| `pause`   | pauses the container — recover with unpause               |
+| `network` | disconnects the container from its docker network         |
+| `recover` | restores whatever was broken (restart, unpause, reconnect)|
+| `stress`  | spikes cpu with stress-ng (optional)                      |
 
-**Safety guard:** The simulation script refuses to target Nginx, daemon, API, Prometheus, or Grafana containers.
+**safety guard:** the simulation script flat out refuses to target nginx, daemon, api, prometheus, or grafana containers. you can't accidentally take down the platform itself.
 
-## Known Limitations
+## known limitations
 
-1. No authentication or authorization — this is an internal tool
-2. Log shipping via `docker logs -f` is simple but not suitable for high-throughput production use
-3. State is stored in flat JSON files — no concurrency guarantees for simultaneous API writes
-4. The health poller checks through Nginx, so if Nginx is down, all envs appear unhealthy
-5. Environment names are not unique — only ENV_IDs are unique
-6. No resource limits on containers — a misbehaving app can consume all host resources
-7. The cleanup daemon runs as a simple bash loop — not a proper systemd service
-8. stress-ng may not be available inside the sandbox app container by default
+1. no auth — this is an internal tool, not exposed to the internet (hopefully)
+2. log shipping via `docker logs -f` is simple but won't cut it for high-throughput production use
+3. state lives in flat json files — no concurrency guarantees if two api calls hit at the exact same time
+4. the health poller checks through nginx, so if nginx is down everything looks unhealthy
+5. environment names aren't unique — only env ids are
+6. no resource limits on containers — a misbehaving app can eat all your ram
+7. the cleanup daemon is a bash loop, not a systemd service — it works but it's not production-grade
+8. stress-ng might not be available inside the sandbox app container by default
