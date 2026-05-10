@@ -15,7 +15,7 @@ up: ## Start Nginx + daemon + API + health poller
 	@mkdir -p $(PROJECT_DIR)/logs $(PROJECT_DIR)/envs
 	@bash $(PROJECT_DIR)/platform/cleanup_daemon.sh &> /tmp/sandbox-daemon.log & echo $$! > /tmp/sandbox-daemon.pid && echo "  ✓ Daemon started (PID: $$(cat /tmp/sandbox-daemon.pid))"
 	@source /opt/sandbox-venv/bin/activate && python3 $(PROJECT_DIR)/monitor/health_poller.py &> /tmp/sandbox-poller.log & echo $$! > /tmp/sandbox-poller.pid && echo "  ✓ Health poller started (PID: $$(cat /tmp/sandbox-poller.pid))"
-	@source /opt/sandbox-venv/bin/activate && uvicorn api.api:app --host 0.0.0.0 --port 8080 --app-dir $(PROJECT_DIR) &> /tmp/sandbox-api.log & echo $$! > /tmp/sandbox-api.pid && echo "  ✓ API started (PID: $$(cat /tmp/sandbox-api.pid))"
+	@source /opt/sandbox-venv/bin/activate && uvicorn api:app --host 0.0.0.0 --port 8080 --app-dir $(PROJECT_DIR)/platform &> /tmp/sandbox-api.log & echo $$! > /tmp/sandbox-api.pid && echo "  ✓ API started (PID: $$(cat /tmp/sandbox-api.pid))"
 	@sleep 1 && curl -s http://localhost:8080/health > /dev/null && echo "  ✓ API health check passed" || echo "  ⚠ API not responding yet"
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -29,7 +29,7 @@ down: ## Stop everything and destroy all environments
 	@for f in $(PROJECT_DIR)/envs/*.json; do \
 		[ -f "$$f" ] && bash $(PROJECT_DIR)/platform/destroy_env.sh $$(basename $$f .json) 2>/dev/null || true; \
 	done
-	@pkill -f "uvicorn api.api:app" 2>/dev/null && echo "  ✓ API stopped" || true
+	@pkill -f "uvicorn api:app" 2>/dev/null && echo "  ✓ API stopped" || true
 	@pkill -f "health_poller.py" 2>/dev/null && echo "  ✓ Poller stopped" || true
 	@pkill -f "cleanup_daemon.sh" 2>/dev/null && echo "  ✓ Daemon stopped" || true
 	@rm -f /tmp/sandbox-daemon.pid /tmp/sandbox-api.pid /tmp/sandbox-poller.pid /tmp/sandbox-daemon.log /tmp/sandbox-api.log /tmp/sandbox-poller.log
@@ -75,7 +75,7 @@ clean: ## Wipe all state, logs, and archives
 	done
 	rm -rf $(PROJECT_DIR)/envs/* $(PROJECT_DIR)/logs/* $(PROJECT_DIR)/nginx/conf.d/*.conf
 	mkdir -p $(PROJECT_DIR)/logs/archived $(PROJECT_DIR)/envs
-	@pkill -f "uvicorn api.api:app" 2>/dev/null || true
+	@pkill -f "uvicorn api:app" 2>/dev/null || true
 	@pkill -f "health_poller.py" 2>/dev/null || true
 	@pkill -f "cleanup_daemon.sh" 2>/dev/null || true
 	@rm -f /tmp/sandbox-daemon.pid /tmp/sandbox-api.pid /tmp/sandbox-poller.pid /tmp/sandbox-daemon.log /tmp/sandbox-api.log /tmp/sandbox-poller.log
