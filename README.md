@@ -4,30 +4,39 @@ A self-service platform for spinning up isolated temporary environments, deployi
 
 ## Architecture
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │              Host VM                         │
-                    │                                              │
-  :80 ─────────►┌──┴──┐                                          │
-                 │Nginx│── /env-abc123/ ──► env-abc123-app:8080  │
-                 │(Dkr)│── /env-xyz789/ ──► env-xyz789-app:8080  │
-                 └──┬──┘                                          │
-                    │ sandbox-net (Docker bridge)                  │
-                    │                                              │
-  :8080 ──────►┌────┴────┐                                       │
-               │ FastAPI │── subprocess ──► bash scripts          │
-               │   API   │── reads ──► envs/*.json, logs/*        │
-               └────┬────┘                                       │
-                    │                                              │
-         ┌──────────┼──────────┐                                 │
-    ┌────┴────┐ ┌──┴───┐                                      │
-    │ Daemon  │ │Poller│                                       │
-    │(nohup)  │ │(py)  │                                       │
-    └─────────┘ └──────┘                                       │
-                                                              │
-  :9090 ──► Prometheus (opt)                                  │
-  :3000 ──► Grafana    (opt)                                  │
-                    └─────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HOST["Host VM"]
+        direction TB
+
+        NGINX["Nginx (Docker)"]
+        FASTAPI["FastAPI API"]
+        DAEMON["Daemon (nohup)"]
+        POLLER["Poller (py)"]
+        PROM["Prometheus (opt)"]
+        GRAF["Grafana (opt)"]
+
+        APP1["env-abc123-app:8080"]
+        APP2["env-xyz789-app:8080"]
+
+        NGINX -- "/env-abc123/" --> APP1
+        NGINX -- "/env-xyz789/" --> APP2
+
+        FASTAPI -- "subprocess" --> BASH["bash scripts"]
+        FASTAPI -- "reads" --> FILES["envs/*.json\nlogs/*"]
+
+        FASTAPI --> DAEMON
+        FASTAPI --> POLLER
+
+        NET["sandbox-net\n(Docker bridge)"]
+        NGINX --- NET
+        FASTAPI --- NET
+    end
+
+    PORT80[":80"] --> NGINX
+    PORT8080[":8080"] --> FASTAPI
+    PORT9090[":9090"] --> PROM
+    PORT3000[":3000"] --> GRAF
 ```
 
 ### Network Design
